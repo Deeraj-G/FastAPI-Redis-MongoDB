@@ -1,14 +1,18 @@
 import os
 from fastapi import FastAPI, Depends, status, Response
-from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-import json
 from uuid import UUID
+from loguru import logger
 
 
 from models import Item, Collection
-from helpers import get_mongo_client, get_db_from_mongo_client
-from redis_pool import RedisPoolProvider, publish
+from helpers import (
+    get_mongo_client,
+    get_db_from_mongo_client,
+    send_response,
+    convert_to_bson_binary,
+)
+from redis_pool import RedisPoolProvider
 
 load_dotenv()
 
@@ -28,10 +32,10 @@ def read_root():
 
 @app.get("/get/items")
 async def get_entries(
-        collection: Collection,
-        response: Response,
-        redis_client: RedisPoolProvider = Depends(RedisPoolProvider)
-    ):
+    collection: Collection,
+    response: Response,
+    redis_client: RedisPoolProvider = Depends(RedisPoolProvider),
+):
     # Should return all entries in 'db_name' db and 'collection_name' collection
     if not collection.redis_id:
         response.status_code = status.HTTP_400_BAD_REQUEST
@@ -39,31 +43,38 @@ async def get_entries(
             "message": "POST Unsuccessful - redis_id invalid",
             "status": response.status_code,
         }
-        return JSONResponse(content=response_data, status_code=response.status_code)
-    
+
+        # return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=False,
+            redis_client=redis_client,
+            redis_key=None,
+        )
+
     # Basic error handling
     if not collection.collection_name:
         response_data = {
             "message": "collection_name not in request JSON",
             "status": status.HTTP_400_BAD_REQUEST,
         }
-        await publish(
-            redis_client,
-            f"{UUID(collection.redis_id)}:post:collection",
-            json.dumps(response_data),
+
+        # publish to the redis client and return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=True,
+            redis_client=redis_client,
+            redis_key=f"{UUID(collection.redis_id)}:get:entries",
         )
-        return JSONResponse(
-            content=response_data, status_code=status.HTTP_400_BAD_REQUEST
-        )
-    
-
-
-
 
 
 @app.post("/post/collection")
 async def create_collection(
-    collection: Collection, redis_client: RedisPoolProvider = Depends(RedisPoolProvider)
+    collection: Collection,
+    response: Response,
+    redis_client: RedisPoolProvider = Depends(RedisPoolProvider),
 ):
     """
     Create a collection in a specific db
@@ -71,17 +82,19 @@ async def create_collection(
 
     # Basic error handling
     if not collection.collection_name:
+        response.status_code = status.HTTP_400_BAD_REQUEST
         response_data = {
             "message": "collection_name not in request JSON",
-            "status": status.HTTP_400_BAD_REQUEST,
+            "status": response.status_code,
         }
-        await publish(
-            redis_client,
-            f"{UUID(collection.redis_id)}:post:collection",
-            json.dumps(response_data),
-        )
-        return JSONResponse(
-            content=response_data, status_code=status.HTTP_400_BAD_REQUEST
+
+        # publish to the redis client and return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=True,
+            redis_client=redis_client,
+            redis_key=f"{UUID(collection.redis_id)}:post:collection",
         )
 
     mongo_client = get_mongo_client()
@@ -89,35 +102,44 @@ async def create_collection(
 
     # TODO: Ensure db_name exists in mongodb
     if db_conn is not None:
-        print(f"CHECK: {db_conn}")
+        logger.debug(f"CHECK: {db_conn}")
         pass
 
     try:
+        # create the collection
         await db_conn.create_collection(
             f"{collection.collection_name}", check_exists=True
         )
+
+        response.status_code = status.HTTP_201_CREATED
         response_data = {
             "message": "collection successfully created",
-            "status": status.HTTP_200_OK,
+            "status": response.status_code,
         }
-        await publish(
-            redis_client,
-            f"{UUID(collection.redis_id)}:post:collection",
-            json.dumps(response_data),
+
+        # publish to the redis client and return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=True,
+            redis_client=redis_client,
+            redis_key=f"{UUID(collection.redis_id)}:post:collection",
         )
-        return JSONResponse(content=response_data, status_code=status.HTTP_200_OK)
+
     except Exception as e:
+        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
         response_data = {
             "message": f"failed to create collection with exception: {e}",
             "status": status.HTTP_500_INTERNAL_SERVER_ERROR,
         }
-        await publish(
-            redis_client,
-            f"{UUID(collection.redis_id)}:post:collection",
-            json.dumps(response_data),
-        )
-        return JSONResponse(
-            content=response_data, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
+
+        # publish to the redis client and return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=True,
+            redis_client=redis_client,
+            redis_key=f"{UUID(collection.redis_id)}:post:collection",
         )
 
 
@@ -132,7 +154,9 @@ async def create_item(
     """
 
     # get MongoDB client and establish connection with specified db
-    db_conn = get_db_from_mongo_client(mongo_client=get_mongo_client(), db_name=item.db_name)
+    db_conn = get_db_from_mongo_client(
+        mongo_client=get_mongo_client(), db_name=item.db_name
+    )
 
     if not item.redis_id:
         response.status_code = status.HTTP_400_BAD_REQUEST
@@ -140,7 +164,15 @@ async def create_item(
             "message": "POST Unsuccessful - redis_id invalid",
             "status": response.status_code,
         }
-        return JSONResponse(content=response_data, status_code=response.status_code)
+
+        # publish to the redis client and return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=False,
+            redis_client=redis_client,
+            redis_key=None,
+        )
 
     # item wasn't passed in with collection as a valid param
     if not item.collection_name:
@@ -149,10 +181,15 @@ async def create_item(
             "message": f"POST Unsuccessful - collection '{item.collection_name}' does not exist",
             "status": response.status_code,
         }
-        await publish(
-            redis_client, f"{UUID(item.redis_id)}:post:items", json.dumps(response_data)
+
+        # publish to the redis client and return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=True,
+            redis_client=redis_client,
+            redis_key=f"{UUID(item.redis_id)}:post:items",
         )
-        return JSONResponse(content=response_data, status_code=response.status_code)
 
     # collection doesn't exist
     if item.collection_name not in await db_conn.list_collection_names():
@@ -161,15 +198,24 @@ async def create_item(
             "message": f"POST Unsuccessful - collection '{item.collection_name}' does not exist",
             "status": response.status_code,
         }
-        await publish(
-            redis_client, f"{UUID(item.redis_id)}:post:items", json.dumps(response_data)
+
+        # publish to the redis client and return a JSONObject
+        return await send_response(
+            content=response_data,
+            status_code=response.status_code,
+            pub=True,
+            redis_client=redis_client,
+            redis_key=f"{UUID(item.redis_id)}:post:items",
         )
 
     # get the collection from MongoDB
     db_collection = db_conn.get_collection(f"{item.collection_name}")
 
-    # handle insertion of item into specific collection
-    new_item = await db_collection.insert_one(item.model_dump(by_alias=True))
+    item_db_insert = convert_to_bson_binary(item)
+
+    # logger.debug(f"MODEL DUMP: {item_db_insert}")
+
+    new_item = await db_collection.insert_one(item_db_insert)
 
     # find the _id of newly created item
     created_item = await db_collection.find_one({"_id": new_item.inserted_id})
@@ -180,8 +226,79 @@ async def create_item(
         "status": response.status_code,
     }
 
-    await publish(
-        redis_client, f"{UUID(item.redis_id)}:post:items", json.dumps(response_data)
+    # publish to the redis client and return a JSONObject
+    return await send_response(
+        content=response_data,
+        status_code=response.status_code,
+        pub=True,
+        redis_client=redis_client,
+        redis_key=f"{UUID(item.redis_id)}:post:items",
     )
 
-    return JSONResponse(content=response_data, status_code=response.status_code)
+
+# @app.post("/post/items")
+# async def create_item(
+#     item: Item,
+#     response: Response,
+#     redis_client: RedisPoolProvider = Depends(RedisPoolProvider),
+# ):
+#     """
+#     Create an item in the specified db and collection
+#     """
+
+#     # get MongoDB client and establish connection with specified db
+#     db_conn = get_db_from_mongo_client(
+#         mongo_client=get_mongo_client(), db_name=item.db_name
+#     )
+
+#     if not item.redis_id:
+#         response.status_code = status.HTTP_400_BAD_REQUEST
+#         response_data = {
+#             "message": "POST Unsuccessful - redis_id invalid",
+#             "status": response.status_code,
+#         }
+#         return JSONResponse(content=response_data, status_code=response.status_code)
+
+#     # item wasn't passed in with collection as a valid param
+#     if not item.collection_name:
+#         response.status_code = status.HTTP_400_BAD_REQUEST
+#         response_data = {
+#             "message": f"POST Unsuccessful - collection '{item.collection_name}' does not exist",
+#             "status": response.status_code,
+#         }
+#         await publish(
+#             redis_client, f"{UUID(item.redis_id)}:post:items", json.dumps(response_data)
+#         )
+#         return JSONResponse(content=response_data, status_code=response.status_code)
+
+#     # collection doesn't exist
+#     if item.collection_name not in await db_conn.list_collection_names():
+#         response.status_code = status.HTTP_404_NOT_FOUND
+#         response_data = {
+#             "message": f"POST Unsuccessful - collection '{item.collection_name}' does not exist",
+#             "status": response.status_code,
+#         }
+#         await publish(
+#             redis_client, f"{UUID(item.redis_id)}:post:items", json.dumps(response_data)
+#         )
+
+#     # get the collection from MongoDB
+#     db_collection = db_conn.get_collection(f"{item.collection_name}")
+
+#     # handle insertion of item into specific collection
+#     new_item = await db_collection.insert_one(item.model_dump(by_alias=True))
+
+#     # find the _id of newly created item
+#     created_item = await db_collection.find_one({"_id": new_item.inserted_id})
+
+#     response.status_code = status.HTTP_201_CREATED
+#     response_data = {
+#         "message": f"POST Successful - created entry for item: {item.name} with item_id: {created_item['_id']}",
+#         "status": response.status_code,
+#     }
+
+#     await publish(
+#         redis_client, f"{UUID(item.redis_id)}:post:items", json.dumps(response_data)
+#     )
+
+#     return JSONResponse(content=response_data, status_code=response.status_code)

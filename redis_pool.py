@@ -1,6 +1,5 @@
 import os
 import redis
-from redis import Redis
 from redis.asyncio.client import PubSub
 from dotenv import load_dotenv
 
@@ -16,6 +15,7 @@ class RedisPoolProvider:
     """
 
     def __init__(self):
+        # Need a container which starts with 'redis://'
         # self.redis_pool = redis.asyncio.ConnectionPool(url=REDIS_URL, decode_responses=True)
         self.redis_client = redis.asyncio.Redis(
             host="localhost", port=6379, decode_responses=True
@@ -41,7 +41,7 @@ async def publish(
     message="",
 ):
     await redis.redis_client.publish(channel, message)
-    return True
+    return "published"
 
 
 # establish and subscribe to channel

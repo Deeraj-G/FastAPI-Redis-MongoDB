@@ -202,7 +202,7 @@ async def create_item(
     # get the collection from MongoDB
     db_collection = db_conn.get_collection(f"{item.collection_name}")
 
-    item_db_insert = convert_to_bson_binary(item)
+    item_db_insert = item.model_dump(by_alias=True)
 
     # logger.debug(f"MODEL DUMP: {item_db_insert}")
 

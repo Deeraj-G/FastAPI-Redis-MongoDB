@@ -204,7 +204,7 @@ async def create_item(
 
     item_db_insert = item.model_dump(by_alias=True)
 
-    # logger.debug(f"MODEL DUMP: {item_db_insert}")
+    item_db_insert["redis_id"] = convert_to_bson_binary(item_db_insert["redis_id"])
 
     new_item = await db_collection.insert_one(item_db_insert)
 

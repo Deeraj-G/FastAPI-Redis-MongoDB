@@ -1,11 +1,13 @@
 # RUN THIS FILE WITH `watchmedo auto-restart --patterns='*.py' --recursive -- arq arq_worker.WorkerSettings`
 
 import os
+
 from arq.connections import RedisSettings
-from openai import AsyncOpenAI
-from models import Item, Collection
-from loguru import logger
 from dotenv import load_dotenv
+from loguru import logger
+from openai import AsyncOpenAI
+
+from models import Collection, Item
 
 load_dotenv()
 

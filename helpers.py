@@ -37,8 +37,8 @@ async def send_response(
     if pub:
         await publish(redis_client, redis_key, json.dumps(content))
 
-    # return the JSONResponse object
-    return JSONResponse(content=content, status_code=status_code)
+    # return JSON object
+    return {"content": content, "status": status_code}
 
 # Convert str type to bson Binary to insert into db with validation rule
 def convert_to_bson_binary(item: Item):

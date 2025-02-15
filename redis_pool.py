@@ -1,7 +1,9 @@
 import os
+
 import redis
-from redis.asyncio.client import PubSub
 from dotenv import load_dotenv
+from loguru import logger
+from redis.asyncio.client import PubSub
 
 load_dotenv()
 
@@ -55,10 +57,10 @@ async def subscribe(channel: str, redis: RedisPoolProvider):
     try:
         async for message in pubsub.listen():
             if message["type"] == "message":
-                print(f"Received: {message['data']} on {channel}")
+                logger.debug(f"Received: {message['data']} on {channel}")
                 yield {"event": "message", "data": message["data"]}
 
     except Exception as e:
-        print(f"Error while listening to {channel}: {e}")
+        logger.debug(f"Error while listening to {channel}: {e}")
     finally:
         await pubsub.unsubscribe(channel)
